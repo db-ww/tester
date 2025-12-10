@@ -1,0 +1,408 @@
+#include <WiFi.h>
+#include <SPIFFS.h>
+
+// Feature toggles: set to 1 to enable, 0 to disable to reduce binary size.
+// If your board has limited flash, set these to 0 or use a larger flash/partition.
+#define ENABLE_HTTP 1
+#define ENABLE_BT 1
+
+#if ENABLE_HTTP
+#include <WebServer.h>
+#endif
+
+#if ENABLE_BT
+#include <BluetoothSerial.h>
+#endif
+
+// WiFi credentials loaded at runtime from SPIFFS
+char wifiSSID[64] = "";
+char wifiPassword[128] = "";
+char deviceName[32] = "speed_reader"; // default name, will be loaded from config
+
+// Pins
+const int LED_PIN = 2;     // D2 onboard LED
+const int D4_DIGITAL = 34; // D4 digital (rotation pulse: HIGH = one full rotation)
+// Use an ADC1 pin so readings still work when WiFi is active.
+// Recommended ADC1 pins: 32,33,34,35,36,39. We'll use GPIO35 here.
+const int D5_ANALOG = 35; // ADC1 (GPIO35)
+
+// Accelerometer pins (UART + INT)
+const int ACCEL_RX_PIN = 16;  // ESP32 RX2  (connect to accelerometer TX)
+const int ACCEL_TX_PIN = 17;  // ESP32 TX2  (connect to accelerometer RX)
+const int ACCEL_INT_PIN = 18; // Interrupt from accelerometer D0/D1
+
+// Example buffers for raw accel UART data (very simple stub)
+String accelLine = "";
+String lastAccelLine = "";
+
+// Globals to hold latest readings
+volatile int lastDigital = 0;
+volatile int lastAnalog = 0;
+volatile bool accelInterruptFlag = false;
+
+// Rotation / speed/distance globals
+volatile unsigned long rotationCount = 0;              // total rotations counted
+volatile unsigned long lastRotationMicros = 0;         // micros of last rotation
+volatile unsigned long lastRotationIntervalMicros = 0; // interval between last two rotations
+volatile unsigned long lastRotationTimeMillis = 0;     // millis of last rotation (for timeout)
+
+float wheelDiameterIn = 3.5f;       // inches (user provided "3.5 x 1.25" - we use diameter 3.5 in)
+float distancePerRotation_m = 0.0f; // meters per rotation (computed in setup)
+float totalDistance_m = 0.0f;
+
+// Radio / server state
+// BluetoothSerial only when enabled
+#if ENABLE_BT
+BluetoothSerial SerialBT;
+#endif
+
+bool haveWiFi = false;
+bool haveBT = false;
+bool serverStarted = false;
+
+// HTTP server on port 80
+#if ENABLE_HTTP
+WebServer server(80);
+#endif
+
+// Non-blocking timers
+unsigned long lastAdcRead = 0;
+unsigned long lastDigitalRead = 0;
+const unsigned long readIntervalMs = 200;
+unsigned long lastAccelPoll = 0;
+const unsigned long accelPollIntervalMs = 50;
+
+#if ENABLE_HTTP
+void handleRoot()
+{
+  server.send(200, "text/plain", "HTTP server OK.\nTry /readings");
+}
+
+void handleReadings()
+{
+  // Build JSON string from latest values
+  // snapshot volatile values
+  unsigned long rc = rotationCount;
+  unsigned long now_ms = millis();
+  unsigned long lastRot_ms = lastRotationTimeMillis;
+  const unsigned long speedTimeoutMs = 2000UL; // if no rotation for 2 sec, speed = 0
+  unsigned long intervalUs = lastRotationIntervalMicros;
+
+  // Check if speed has timed out (no new rotation for > 2 seconds)
+  if (lastRot_ms > 0 && (now_ms - lastRot_ms) > speedTimeoutMs)
+  {
+    intervalUs = 0; // force speed to 0
+  }
+
+  float speed_m_s = 0.0f;
+  if (intervalUs > 0)
+    speed_m_s = distancePerRotation_m * 1e6f / (float)intervalUs;
+
+  // Use integer cm values to avoid floating printf/String usage
+  unsigned long dist_cm = (unsigned long)(totalDistance_m * 100.0f);
+  unsigned long speed_mm_s = (unsigned long)(speed_m_s * 1000.0f);
+  char buf[256];
+  int n = snprintf(buf, sizeof(buf), "{\"digital\":%d,\"analog\":%d,\"rotations\":%lu,\"distance_cm\":%lu,\"speed_mm_s\":%lu,\"lastAccelLine\":%s}", lastDigital, lastAnalog, rc, dist_cm, speed_mm_s, lastAccelLine.c_str());
+  if (n < 0)
+    buf[0] = '\0';
+  server.send(200, "application/json", buf);
+}
+#endif
+
+// ===== Interrupt handler =====
+void IRAM_ATTR accelIntISR()
+{
+  accelInterruptFlag = true;
+}
+
+// Rotation ISR: called when D4 goes HIGH (one full rotation)
+void IRAM_ATTR onRotation()
+{
+  unsigned long t = micros();
+  const unsigned long debounceUs = 5000UL; // ignore pulses closer than 5 ms
+  if (lastRotationMicros != 0)
+  {
+    unsigned long dt = t - lastRotationMicros;
+    if (dt < debounceUs)
+      return; // likely bounce, ignore
+    lastRotationIntervalMicros = dt;
+  }
+  lastRotationMicros = t;
+  lastRotationTimeMillis = millis(); // save millis for timeout check
+  rotationCount++;
+}
+
+// Load WiFi config from SPIFFS
+bool loadWiFiConfig()
+{
+  Serial.print("Loading WiFi config from SPIFFS...");
+
+  if (!SPIFFS.begin(true))
+  {
+    Serial.println(" FAILED to mount SPIFFS");
+    return false;
+  }
+
+  if (!SPIFFS.exists("/config.json"))
+  {
+    Serial.println(" config.json not found");
+    // Use defaults
+    strncpy(wifiSSID, "BAYSAN", sizeof(wifiSSID) - 1);
+    strncpy(wifiPassword, "timetowork", sizeof(wifiPassword) - 1);
+    Serial.println("Using default WiFi credentials (edit data/config.json and upload SPIFFS)");
+    return true;
+  }
+
+  File file = SPIFFS.open("/config.json", "r");
+  if (!file)
+  {
+    Serial.println(" Failed to open config.json");
+    return false;
+  }
+
+  // Simple JSON parsing (ssid and password fields)
+  String content = file.readString();
+  file.close();
+
+  // Extract SSID
+  int ssid_start = content.indexOf("\"ssid\":");
+  if (ssid_start != -1)
+  {
+    ssid_start = content.indexOf('\"', ssid_start + 7) + 1;
+    int ssid_end = content.indexOf('\"', ssid_start);
+    String ssid = content.substring(ssid_start, ssid_end);
+    strncpy(wifiSSID, ssid.c_str(), sizeof(wifiSSID) - 1);
+  }
+
+  // Extract password
+  int pwd_start = content.indexOf("\"password\":");
+  if (pwd_start != -1)
+  {
+    pwd_start = content.indexOf('\"', pwd_start + 11) + 1;
+    int pwd_end = content.indexOf('\"', pwd_start);
+    String pwd = content.substring(pwd_start, pwd_end);
+    strncpy(wifiPassword, pwd.c_str(), sizeof(wifiPassword) - 1);
+  }
+
+  // Extract name
+  int name_start = content.indexOf("\"name\":");
+  if (name_start != -1)
+  {
+    name_start = content.indexOf('\"', name_start + 7) + 1;
+    int name_end = content.indexOf('\"', name_start);
+    String name = content.substring(name_start, name_end);
+    strncpy(deviceName, name.c_str(), sizeof(deviceName) - 1);
+  }
+
+  Serial.println(" OK");
+  Serial.print("  SSID: ");
+  Serial.println(wifiSSID);
+  return true;
+}
+
+void setup()
+{
+  Serial.begin(115200);
+  delay(1000); // give Serial time to initialize
+  Serial.println("\n\nSpeed Reader Starting...");
+
+  // Load WiFi config from SPIFFS
+  loadWiFiConfig();
+  pinMode(D4_DIGITAL, INPUT);
+  // Configure ADC pin (ADC1) for stable readings while WiFi is active
+  pinMode(D5_ANALOG, INPUT);
+  analogReadResolution(12);                     // 12-bit -> 0..4095
+  analogSetPinAttenuation(D5_ANALOG, ADC_11db); // allow full scale up to approx Vcc
+
+  // Initialize Accelerometer UART and Interrupt
+  Serial2.begin(9600, SERIAL_8N1, ACCEL_RX_PIN, ACCEL_TX_PIN);
+  pinMode(ACCEL_INT_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(ACCEL_INT_PIN), accelIntISR, RISING);
+
+  // compute distance per rotation (convert inches -> meters)
+  distancePerRotation_m = 3.14159265358979323846 * wheelDiameterIn * 0.0254;
+
+  // Blink D2 on successful startup
+  for (int i = 0; i < 3; i++)
+  {
+    digitalWrite(LED_PIN, HIGH);
+    delay(100);
+    digitalWrite(LED_PIN, LOW);
+    delay(100);
+  }
+
+  // Attach interrupt for rotation pulses
+  attachInterrupt(digitalPinToInterrupt(D4_DIGITAL), onRotation, RISING);
+
+// Attempt to start Bluetooth
+#if ENABLE_BT
+  Serial.print("Starting Bluetooth as '");
+  Serial.print(deviceName);
+  Serial.println("'...");
+  haveBT = SerialBT.begin(deviceName);
+  if (haveBT)
+  {
+    Serial.println(" OK");
+  }
+  else
+  {
+    Serial.println(" FAILED");
+  }
+#else
+  Serial.println("Bluetooth disabled at compile time");
+  haveBT = false;
+  (void)haveBT;
+#endif
+
+  // Attempt to start WiFi and HTTP server, but only wait up to 10 seconds
+  Serial.print("Attempting WiFi connect as '");
+  Serial.print(deviceName);
+  Serial.println("'...");
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(deviceName); // set mDNS hostname
+  WiFi.begin(wifiSSID, wifiPassword);
+  unsigned long startAttempt = millis();
+  while (millis() - startAttempt < 100000UL)
+  {
+    if (WiFi.status() == WL_CONNECTED)
+    {
+      haveWiFi = true;
+      break;
+    }
+    delay(200);
+    Serial.print('.');
+  }
+  if (haveWiFi)
+  {
+    Serial.println("\nWiFi connected");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+#if ENABLE_HTTP
+    // Configure HTTP routes
+    server.on("/", handleRoot);
+    server.on("/readings", handleReadings);
+    server.begin();
+    serverStarted = true;
+    Serial.println("HTTP server started");
+#else
+    Serial.println("HTTP server disabled at compile time");
+#endif
+  }
+  else
+  {
+    Serial.println("\nWiFi not available - running Serial/Bluetooth only");
+  }
+}
+
+void loop()
+{
+  unsigned long now = millis();
+
+  // Non-blocking sensor updates
+  if (now - lastAdcRead >= readIntervalMs)
+  {
+    lastAdcRead = now;
+    lastAnalog = analogRead(D5_ANALOG); // 0–4095 on ESP32
+
+    // Detect ADC issues: some pins are on ADC2 which is not usable with WiFi.
+    static int adcZeroCount = 0;
+    if (lastAnalog == 0)
+      adcZeroCount++;
+    else
+      adcZeroCount = 0;
+    if (adcZeroCount >= 5 && haveWiFi)
+    {
+      Serial.println("Warning: ADC reading stuck at 0. D5 may be on ADC2 and incompatible with WiFi. Consider using an ADC1 pin (e.g. GPIO35) or disabling WiFi.");
+      adcZeroCount = 0; // avoid repeating too often
+    }
+  }
+
+  if (now - lastDigitalRead >= readIntervalMs)
+  {
+    lastDigitalRead = now;
+    lastDigital = digitalRead(D4_DIGITAL);
+  }
+
+// Handle HTTP requests (non-blocking)
+#if ENABLE_HTTP
+  if (serverStarted)
+    server.handleClient();
+#endif
+
+  // Compute speed and distance using rotation interval
+  unsigned long now_ms = millis();
+  unsigned long lastRot_ms = lastRotationTimeMillis;
+  const unsigned long speedTimeoutMs = 2000UL;           // if no rotation for 2 sec, speed = 0
+  unsigned long intervalUs = lastRotationIntervalMicros; // micros
+
+  // Check if speed has timed out (no new rotation for > 2 seconds)
+  if (lastRot_ms > 0 && (now_ms - lastRot_ms) > speedTimeoutMs)
+  {
+    intervalUs = 0; // force speed to 0
+  }
+
+  float speed_m_s = 0.0f;
+  unsigned long rc_snapshot = rotationCount;
+  totalDistance_m = (float)rc_snapshot * distancePerRotation_m;
+  if (intervalUs > 0)
+  {
+    speed_m_s = distancePerRotation_m * 1e6f / (float)intervalUs;
+  }
+
+  
+  // --- Non-blocking accelerometer UART read ---
+  if (now - lastAccelPoll >= accelPollIntervalMs) {
+    lastAccelPoll = now;
+
+    while (Serial2.available()) {
+      char c = Serial2.read();
+      if (c == '\n' || c == '\r') {
+        if (accelLine.length() > 0) {
+          lastAccelLine = accelLine;  // store complete line
+          accelLine = "";
+          Serial.print("Accel line: ");
+          Serial.println(lastAccelLine);
+        }
+      } else {
+        accelLine += c;
+      }
+    }
+  }
+
+  // --- Handle accelerometer interrupt flag ---
+  if (accelInterruptFlag) {
+    accelInterruptFlag = false;
+    Serial.println("Accelerometer INT triggered");
+    // Optional: toggle LED or mark event
+    digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+  }
+
+  // Print periodically for debugging using integer cm values to avoid heavy printf float code
+  unsigned long dist_cm = (unsigned long)(totalDistance_m * 100.0f);
+  unsigned long speed_mm_s = (unsigned long)(speed_m_s * 1000.0f);
+  Serial.print("rot:");
+  Serial.print(rc_snapshot);
+  Serial.print(" dist_cm:");
+  Serial.print(dist_cm);
+  Serial.print(" speed_mm_s:");
+  Serial.print(speed_mm_s);
+  Serial.print(" D4:");
+  Serial.print(lastDigital);
+  Serial.print(" D5:");
+  Serial.println(lastAnalog);
+  Serial.println(" Accel: " + lastAccelLine);
+
+// Also send over Bluetooth if available (simple numeric CSV)
+#if ENABLE_BT
+  if (haveBT)
+  {
+    SerialBT.print(rc_snapshot);
+    SerialBT.print(',');
+    SerialBT.print(dist_cm);
+    SerialBT.print(',');
+    SerialBT.print(speed_mm_s);
+    SerialBT.print(',');
+    SerialBT.println(lastAnalog);
+  }
+#endif
+}

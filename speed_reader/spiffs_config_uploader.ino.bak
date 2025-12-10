@@ -1,0 +1,44 @@
+#include <SPIFFS.h>
+#include <ArduinoJson.h>
+
+// Simple utility to upload WiFi config to SPIFFS
+// Run this sketch once, then switch back to speed_reader.ino
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+  
+  Serial.println("\n\nSPIFFS Config Upload Utility");
+  Serial.println("============================\n");
+
+  if (!SPIFFS.begin(true)) {
+    Serial.println("ERROR: Failed to mount SPIFFS");
+    return;
+  }
+
+  // Create config.json with current WiFi settings
+  DynamicJsonDocument doc(256);
+  doc["ssid"] = "Busse2.4";
+  doc["password"] = "woodfpefsi";
+
+  File configFile = SPIFFS.open("/config.json", "w");
+  if (!configFile) {
+    Serial.println("ERROR: Failed to open /config.json for writing");
+    return;
+  }
+
+  serializeJson(doc, configFile);
+  configFile.close();
+
+  Serial.println("Successfully wrote config.json to SPIFFS");
+  Serial.println("\nCurrent config:");
+  serializeJsonPretty(doc, Serial);
+  Serial.println("\n\nTo change WiFi credentials:");
+  Serial.println("1. Edit the SSID and password in this sketch");
+  Serial.println("2. Upload and run this utility");
+  Serial.println("3. Switch back to speed_reader.ino and upload");
+}
+
+void loop() {
+  delay(1000);
+}
