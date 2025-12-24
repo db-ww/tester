@@ -23,7 +23,7 @@ const int LCD_D7 = 21;
 const int LCD_CONTRAST = 25;  // V0 pin - connect LCD contrast to this GPIO
 
 // ===== LCD Settings =====
-const int LCD_CONTRAST_VALUE = 80;  // 0-255: Lower=lighter, Higher=darker (adjust as needed)
+const int LCD_CONTRAST_VALUE = 100;  // 0-255: Increased to 120 to fix solid blocks (too dark)
 
 // ===== Timing Constants =====
 const unsigned long readIntervalMs = 200;

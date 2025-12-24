@@ -41,7 +41,7 @@ void showJob(const String& job) {
   updateLCD(line1, "R:0 S:0");
 }
 
-void showSpeed(float speed_m_s) {
+void showSpeed(float speed_mph) {
   char line1[17], line2[17];
   
   unsigned long rc = 0;
@@ -54,12 +54,12 @@ void showSpeed(float speed_m_s) {
     rc = rotationCount;
     active = sessionActive;
     angle = currentAngle;
-    strncpy(jobNameBuf, currentJob.c_str(), sizeof(jobNameBuf) - 1);
+    strncpy(jobNameBuf, currentJob, sizeof(jobNameBuf) - 1);
     jobNameBuf[sizeof(jobNameBuf) - 1] = '\0';
     xSemaphoreGive(dataMutex);
   }
   
-  float dist_m = (float)rc * distancePerRotation_m;
+  float dist_miles = (float)rc * distancePerRotation_miles;
   
   // Line 1: Job + Status
   const char* status = active ? "Run " : "Free";
@@ -70,13 +70,9 @@ void showSpeed(float speed_m_s) {
   snprintf(line1, sizeof(line1), "Job:%.7s %.4s", jobName, status);
   
   // Line 2: Dist + Speed + Angle
-  // D:123m S:1.2 A:45
-  // Dist (int meters), Speed (1 decimal), Angle (int)
-  // Max width check: D:999m (6) + space (1) + S:9.9 (5) + space (1) + A:90 (4) = 17 chars (overflows 16)
-  // New Format: D:99m S:1.2 A:45 (Total 15 chars approx)
-  // Let's use compact format
-  // D:123 S:1.2 A:45 (Removed 'm')
-  snprintf(line2, sizeof(line2), "D:%.0f S:%.1f A:%.0f", dist_m, speed_m_s, angle);
+  // Line 2: Speed + Angle (Distance removed to fit 2 decimal speed)
+  // Example: S:12.34 A:12.3
+  snprintf(line2, sizeof(line2), "S:%.2f A:%.1f", speed_mph, angle);
   
   updateLCD(line1, line2);
 }

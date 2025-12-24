@@ -12,6 +12,7 @@
 #include "http_handlers.h"
 #include "accelerometer.h"
 #include "tasks.h"
+#include "startup_check.h"
 
 #if ENABLE_HTTP
 #include <WebServer.h>
@@ -40,14 +41,26 @@ volatile unsigned long lastRotationMicros = 0;
 volatile unsigned long lastRotationIntervalMicros = 0;
 volatile unsigned long lastRotationTimeMillis = 0;
 
-float distancePerRotation_m = 0.0f;
-float totalDistance_m = 0.0f;
-float maxSpeed_m_s = 0.0f;
+float distancePerRotation_miles = 0.0f;
+float totalDistance_miles = 0.0f;
+float maxSpeed_mph = 0.0f;
 float currentAngle = 0.0f;
+float maxAngle = -180.0f;
+float minAngle = 180.0f;
 
 // Job tracking
-String currentJob = "";
+char currentJob[32] = "";
 bool sessionActive = false;
+
+// Config Defaults
+float speedOffset = 0.0f;
+float distanceOffset = 0.0f;
+float angleOffset = 0.0f;
+float accelOffset = 0.0f;
+float accelScale = 1.0f;
+float speedScale = 1.0f;
+int pulsesPerRotation = 1; // Defaulting to 1
+char adminPassword[32] = "hello"; // Default plaintext for initial setup attempt
 
 // Radio / server state
 #if ENABLE_BT
@@ -87,29 +100,62 @@ void setup() {
   // Initialize LCD
   Serial.println("Initializing LCD...");
   
+  // Pre-initialize LCD pins to known state to prevent garbage
+  pinMode(LCD_RS, OUTPUT); digitalWrite(LCD_RS, LOW);
+  pinMode(LCD_E, OUTPUT);  digitalWrite(LCD_E, LOW);
+  pinMode(LCD_D4, OUTPUT); digitalWrite(LCD_D4, LOW);
+  pinMode(LCD_D5, OUTPUT); digitalWrite(LCD_D5, LOW);
+  pinMode(LCD_D6, OUTPUT); digitalWrite(LCD_D6, LOW);
+  pinMode(LCD_D7, OUTPUT); digitalWrite(LCD_D7, LOW);
+
   // Set up contrast control via PWM
   pinMode(LCD_CONTRAST, OUTPUT);
   analogWrite(LCD_CONTRAST, LCD_CONTRAST_VALUE);
   Serial.print("LCD contrast set to: ");
   Serial.println(LCD_CONTRAST_VALUE);
   
-  delay(50);
+  delay(100); // 100ms for power stabilization
   lcd.begin(16, 2);
-  delay(50);
+  delay(100);
   updateLCD("Initializing...", "Please wait");
   
   // Load WiFi config
+  updateLCD("Loading Config", "SPIFFS...");
   loadWiFiConfig();
   
   // Configure pins
+  updateLCD("Configuring", "Pins...");
   pinMode(LED_PIN, OUTPUT);
   pinMode(D4_DIGITAL, INPUT_PULLUP); // Use internal pull-up
   pinMode(D5_ANALOG, INPUT);
   analogReadResolution(12);
   analogSetPinAttenuation(D5_ANALOG, ADC_11db);
   
+  Serial.print("Configured Pins: D4_DIGITAL=");
+  Serial.print(D4_DIGITAL);
+  Serial.print(" (Speed), D5_ANALOG=");
+  Serial.print(D5_ANALOG);
+  Serial.println(" (Monitor)");
+  
+  // Initial read test
+  int initialVal = analogRead(D5_ANALOG);
+  Serial.print("Initial Analog Read: ");
+  Serial.println(initialVal);
+  
   // Compute distance per rotation
-  distancePerRotation_m = 3.14159265358979323846 * wheelDiameterIn * 0.0254;
+  // 1 inch = 1/63360 miles
+  // Circumference = PI * Diameter
+  distancePerRotation_miles = (3.14159265358979323846 * wheelDiameterIn) / 63360.0;
+  
+  // Adjust for decimal point correction
+  distancePerRotation_miles *= 0.1f;
+  
+  // Apply configuration offset as a calibration adjustment per rotation
+  // This ensures distance starts at 0 but accumulates with the offset correction
+  distancePerRotation_miles += distanceOffset;
+  
+  Serial.print("Dist/Rot (miles): ");
+  Serial.println(distancePerRotation_miles, 8);
   
   // Startup blink
   for (int i = 0; i < 3; i++) {
@@ -120,7 +166,10 @@ void setup() {
   }
 
   // Initialize Accelerometer
+  updateLCD("Accel Init", "Please wait...");
   initAccelerometer();
+  
+  updateLCD("Accel Calib", "Keep Still...");
   calibrateAccelerometer(50);
   
   // Attach rotation interrupt
@@ -176,6 +225,7 @@ void setup() {
     server.on("/", handleRoot);
     server.on("/readings", handleReadings);
     server.on("/start", handleStart);
+    server.on("/config", handleConfig);
     server.begin();
     serverStarted = true;
     Serial.println("HTTP server started");
@@ -206,6 +256,12 @@ void setup() {
     &displayTaskHandle,
     1
   );
+
+  // Run Startup Diagnostics
+  runStartupDiagnostics();
+  
+  // Zero out readings after diagnostics (in case sensors picked up noise/movement)
+  resetSession();
   
   // Show ready
   showReady();

@@ -31,33 +31,51 @@ void sensorTask(void* parameter) {
     // Periodic debug print
     if (now - lastPrint >= printInterval) {
       lastPrint = now;
-      float speed_m_s = getCurrentSpeed();
+      float speed_mph = getCurrentSpeed();
       
-      unsigned long rc, dist_cm, speed_mm_s;
+      unsigned long rc;
+      float d_miles;
+      
       if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
         rc = rotationCount;
-        totalDistance_m = (float)rc * distancePerRotation_m;
-        dist_cm = (unsigned long)(totalDistance_m * 100.0f);
-        speed_mm_s = (unsigned long)(speed_m_s * 1000.0f);
+        rc = rotationCount;
+        totalDistance_miles = (float)rc * distancePerRotation_miles;
+        d_miles = totalDistance_miles;
         xSemaphoreGive(dataMutex);
       }
       
       Serial.print("rot:");
       Serial.print(rc);
-      Serial.print(" dist_cm:");
-      Serial.print(dist_cm);
-      Serial.print(" speed_mm_s:");
-      Serial.print(speed_mm_s);
-      Serial.print(" D4:");
+      Serial.print(" dist_mi:");
+      Serial.print(d_miles, 2);
+      Serial.print(" speed_mph:");
+      Serial.print(speed_mph, 2);
+      Serial.print(" D4(Pin");
+      Serial.print(D4_DIGITAL);
+      Serial.print("):");
       Serial.print(lastDigital);
-      Serial.print(" D5:");
+      Serial.print(" D5(Pin");
+      Serial.print(D5_ANALOG);
+      Serial.print("):");
       Serial.print(lastAnalog);
+      
+      // Calculate and print voltage for debugging
+      float voltage = (lastAnalog / 4095.0f) * 3.3f; // Assumes 11dB attenuation
+      Serial.print(" (");
+      Serial.print(voltage, 2);
+      Serial.print("V)");
+
       Serial.print(" Angle:");
-      Serial.print(currentAngle * 100.0f, 4);
+      Serial.print(currentAngle, 4);
+      
+      // Access raw angle (no mutex needed as it's just for debug/stateless)
+      extern float rawAngle;
+      Serial.print(" RawAng:");
+      Serial.print(rawAngle, 4);
       
       // Debug Raw
       extern int16_t debug_raw_x, debug_raw_y, debug_raw_z;
-      Serial.print(" Raw:[");
+      Serial.print(" RawAcc:[");
       Serial.print(debug_raw_x); Serial.print(",");
       Serial.print(debug_raw_y); Serial.print(",");
       Serial.print(debug_raw_z); Serial.println("]");
@@ -66,9 +84,9 @@ void sensorTask(void* parameter) {
       if (haveBT) {
         SerialBT.print(rc);
         SerialBT.print(',');
-        SerialBT.print(dist_cm);
+        SerialBT.print(d_miles);
         SerialBT.print(',');
-        SerialBT.print(speed_mm_s);
+        SerialBT.print(speed_mph);
         SerialBT.print(',');
         SerialBT.println(lastAnalog);
       }
@@ -101,8 +119,8 @@ void displayTask(void* parameter) {
       }
 
       if (shouldShowStats) {
-        float speed_m_s = getCurrentSpeed();
-        showSpeed(speed_m_s);
+        float speed_mph = getCurrentSpeed();
+        showSpeed(speed_mph);
       } else {
         // Only refresh Ready screen occasionally to prevent flickering 
         // if it was already showing ready, but here we just leave it.

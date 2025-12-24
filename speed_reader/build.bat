@@ -10,7 +10,8 @@ set "BOARD=esp32:esp32:esp32:PartitionScheme=huge_app"
 set "PORT="
 set "BUILD_ONLY=0"
 set "UPLOAD_ONLY=0"
-set "SKIP_DATA=0"
+set "SKIP_DATA=1"
+set "CLEAN_BUILD=0"
 
 REM Parse command line arguments
 :parse_args
@@ -36,6 +37,16 @@ if /i "%~1"=="-SkipData" (
     shift
     goto parse_args
 )
+if /i "%~1"=="-UploadData" (
+    set "SKIP_DATA=0"
+    shift
+    goto parse_args
+)
+if /i "%~1"=="-Clean" (
+    set "CLEAN_BUILD=1"
+    shift
+    goto parse_args
+)
 if /i "%~1"=="-h" goto show_help
 if /i "%~1"=="--help" goto show_help
 shift
@@ -48,7 +59,9 @@ echo Options:
 echo   -Port COMx        Serial port (default: Auto-detect)
 echo   -BuildOnly        Compile only without uploading
 echo   -UploadOnly       Upload only without compiling (fast)
-echo   -SkipData         Skip uploading SPIFFS data
+echo   -UploadData       Upload SPIFFS data (disabled by default)
+echo   -SkipData         Skip uploading SPIFFS data (default)
+echo   -Clean            Clean build directory before compiling
 echo   -h, --help        Show this help message
 echo.
 echo Examples:
@@ -103,7 +116,17 @@ echo Port: %PORT%
 echo Build only: %BUILD_ONLY%
 echo Upload only: %UPLOAD_ONLY%
 echo Skip Data: %SKIP_DATA%
+echo Clean Build: %CLEAN_BUILD%
 echo.
+
+if %CLEAN_BUILD% equ 1 (
+    if exist "%SKETCH_PATH%\build" (
+        echo Cleaning build directory...
+        rmdir /s /q "%SKETCH_PATH%\build"
+        echo Done.
+        echo.
+    )
+)
 
 REM Check if arduino-cli is available
 where arduino-cli >nul 2>&1
@@ -125,7 +148,9 @@ if %UPLOAD_ONLY% equ 1 (
 REM Compile the sketch
 echo Compiling sketch...
 echo.
-call arduino-cli compile --fqbn %BOARD% "%SKETCH_PATH%" --verbose
+if not exist "%SKETCH_PATH%\build\obj" mkdir "%SKETCH_PATH%\build\obj"
+if not exist "%SKETCH_PATH%\build\bin" mkdir "%SKETCH_PATH%\build\bin"
+call arduino-cli compile --fqbn %BOARD% --build-path "%SKETCH_PATH%\build\obj" --output-dir "%SKETCH_PATH%\build\bin" "%SKETCH_PATH%" --verbose
 
 if errorlevel 1 (
     echo.
@@ -147,7 +172,7 @@ if %BUILD_ONLY% equ 1 (
 REM Upload the sketch
 echo Uploading sketch to board...
 echo.
-call arduino-cli upload -p %PORT% --fqbn %BOARD% "%SKETCH_PATH%" --verbose
+call arduino-cli upload -p %PORT% --fqbn %BOARD% --input-dir "%SKETCH_PATH%\build\bin" --verbose
 
 if errorlevel 1 (
     echo.

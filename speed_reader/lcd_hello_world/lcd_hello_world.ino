@@ -3,6 +3,10 @@
 // RS, E, D4, D5, D6, D7
 LiquidCrystal lcd(23, 22, 5, 18, 19, 21);
 
+// Contrast Pin
+const int LCD_CONTRAST = 25;
+const int LCD_CONTRAST_VALUE = 100;
+
 void setup() {
   Serial.begin(115200);
   delay(100);
@@ -15,12 +19,27 @@ void setup() {
   Serial.println("  D5  -> GPIO 18");
   Serial.println("  D6  -> GPIO 19");
   Serial.println("  D7  -> GPIO 21");
+  Serial.println("  V0  -> GPIO 25 (Contrast)");
   Serial.println("\nInitializing LCD...");
   
+  // Pre-initialize LCD pins to known state to prevent garbage
+  pinMode(23, OUTPUT); digitalWrite(23, LOW);
+  pinMode(22, OUTPUT); digitalWrite(22, LOW);
+  pinMode(5, OUTPUT);  digitalWrite(5, LOW);
+  pinMode(18, OUTPUT); digitalWrite(18, LOW);
+  pinMode(19, OUTPUT); digitalWrite(19, LOW);
+  pinMode(21, OUTPUT); digitalWrite(21, LOW);
+
+  // Set up contrast control via PWM
+  pinMode(LCD_CONTRAST, OUTPUT);
+  analogWrite(LCD_CONTRAST, LCD_CONTRAST_VALUE);
+  Serial.print("LCD contrast set to: ");
+  Serial.println(LCD_CONTRAST_VALUE);
+
   // Initialize LCD with delay
-  delay(50);
+  delay(100);
   lcd.begin(16, 2);
-  delay(50);
+  delay(100);
   
   Serial.println("LCD initialized!");
   Serial.println("Writing to LCD...");
@@ -35,7 +54,7 @@ void setup() {
   
   Serial.println("Text written to LCD");
   Serial.println("\nIf LCD is blank but backlight is on:");
-  Serial.println("1. Adjust contrast potentiometer (small screw on LCD module)");
+  Serial.println("1. Check contrast value in code (currently 100)");
   Serial.println("2. Check all pin connections");
   Serial.println("3. Verify LCD is 5V compatible or use level shifters");
 }

@@ -6,8 +6,9 @@ setlocal enabledelayedexpansion
 
 REM Default parameters
 set "BOARD=esp32:esp32:esp32"
-set "PORT=COM7"
+set "PORT="
 set "BUILD_ONLY=0"
+set "UPLOAD_ONLY=0"
 
 REM Parse command line arguments
 :parse_args
@@ -23,6 +24,11 @@ if /i "%~1"=="-BuildOnly" (
     shift
     goto parse_args
 )
+if /i "%~1"=="-UploadOnly" (
+    set "UPLOAD_ONLY=1"
+    shift
+    goto parse_args
+)
 if /i "%~1"=="-h" goto show_help
 if /i "%~1"=="--help" goto show_help
 shift
@@ -32,8 +38,9 @@ goto parse_args
 echo Usage: build_lcd.bat [options]
 echo.
 echo Options:
-echo   -Port COMx        Serial port (default: COM7)
+echo   -Port COMx        Serial port (default: Auto-detect)
 echo   -BuildOnly        Compile only without uploading
+echo   -UploadOnly       Upload only without compiling
 echo   -h, --help        Show this help message
 echo.
 echo Examples:
@@ -43,6 +50,21 @@ echo   build_lcd.bat -BuildOnly
 exit /b 0
 
 :args_done
+REM Auto-detect port if not specified and we need to upload
+if "%PORT%"=="" (
+    if %BUILD_ONLY% equ 0 (
+        echo Auto-detecting COM port...
+        for /f "tokens=1" %%a in ('arduino-cli board list ^| findstr "COM"') do (
+            set "PORT=%%a"
+            goto port_found
+        )
+        echo Error: No COM port found!
+        echo Please specify port using -Port flag or connect device.
+        exit /b 1
+    )
+)
+
+:port_found
 REM Get script directory - use pushd/popd for reliable absolute path
 pushd "%~dp0" 2>nul || pushd .
 set "SKETCH_PATH=%CD%"
@@ -58,6 +80,7 @@ echo Sketch: %SKETCH_NAME%
 echo Board: %BOARD%
 echo Port: %PORT%
 echo Build only: %BUILD_ONLY%
+echo Upload only: %UPLOAD_ONLY%
 echo.
 
 REM Check if arduino-cli is available
@@ -90,7 +113,16 @@ if errorlevel 1 (
 ) else (
     echo ESP32 core is installed
 )
+    echo ESP32 core is installed
+)
 echo.
+
+REM Check if upload-only mode
+if %UPLOAD_ONLY% equ 1 (
+    echo Upload-only mode. Skipping compilation.
+    echo.
+    goto upload_sketch
+)
 
 REM Compile the sketch
 echo Compiling sketch...
@@ -102,7 +134,7 @@ if errorlevel 1 (
     echo Compilation failed!
     echo.
     echo Common issues:
-    echo - Make sure the LiquidCrystal_I2C library is installed
+    echo - Make sure the LiquidCrystal library is installed
     echo - Check that the ESP32 board support is installed
     echo.
     exit /b 1
@@ -118,6 +150,8 @@ if %BUILD_ONLY% equ 1 (
     exit /b 0
 )
 
+REM Upload the sketch
+:upload_sketch
 REM Upload the sketch
 echo Uploading sketch to board on %PORT%...
 echo.
@@ -140,11 +174,21 @@ echo Sketch upload successful!
 echo.
 echo Your LCD should now display "Hello, World!"
 echo.
-echo Wiring reminder for ESP32:
-echo   LCD GND  -^> ESP32 GND
-echo   LCD VCC  -^> ESP32 5V or 3.3V
-echo   LCD SDA  -^> ESP32 GPIO 21
-echo   LCD SCL  -^> ESP32 GPIO 22
+echo ========================================
+echo           PIN MAPPING REMINDER
+echo ========================================
+echo   LCD RS   -^> ESP32 GPIO 23
+echo   LCD E    -^> ESP32 GPIO 22
+echo   LCD D4   -^> ESP32 GPIO 5
+echo   LCD D5   -^> ESP32 GPIO 18
+echo   LCD D6   -^> ESP32 GPIO 19
+echo   LCD D7   -^> ESP32 GPIO 21
+echo   LCD V0   -^> ESP32 GPIO 25 (Contrast)
+echo    VS      -^> GND
+echo    VDD     -^> 5V (VIN)
+echo    K (Led-) -^> GND
+echo    A (Led+) -^> 3.3V or 5V (via Resistor)
+echo ========================================
 echo.
 
 arduino-cli monitor --config 115200 -p %PORT%

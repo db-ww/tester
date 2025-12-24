@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "..\\..\\..,..\\..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..\\..,..\\..,..\\..\\..,..\\..\\..,..\\..\\..,..\\..,..\\..,..\\..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "",
+  "fqbn": "esp32:esp32:esp32:PartitionScheme=huge_app",
+  "hardwareFolders": "C:\\Users\\deepak babu\\AppData\\Local\\Arduino15\\packages",
+  "otherLibrariesFolders": "C:\\Users\\deepak babu\\Documents\\Arduino\\libraries",
+  "sketchLocation": "D:\\woodway\\apps\\Arduino\\Tester\\speed_reader"
+}

@@ -8,8 +8,10 @@
 void resetSession() {
   if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
     rotationCount = 0;
-    totalDistance_m = 0.0f;
-    maxSpeed_m_s = 0.0f;
+    totalDistance_miles = 0.0f;
+    maxSpeed_mph = 0.0f;
+    maxAngle = -180.0f;
+    minAngle = 180.0f;
     lastRotationMicros = 0;
     lastRotationIntervalMicros = 0;
     lastRotationTimeMillis = 0;
@@ -22,7 +24,8 @@ void startSession(const String& job) {
   resetSession();
   
   if (xSemaphoreTake(dataMutex, portMAX_DELAY) == pdTRUE) {
-    currentJob = job;
+    strncpy(currentJob, job.c_str(), sizeof(currentJob) - 1);
+    currentJob[sizeof(currentJob) - 1] = '\0';
     sessionActive = true;
     xSemaphoreGive(dataMutex);
   }

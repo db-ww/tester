@@ -1,0 +1,11 @@
+#line 1 "D:\\woodway\\apps\\Arduino\\Tester\\speed_reader\\data\\config.json"
+{
+  "ssid": "Busse2.4",
+  "password": "woodfpefsi",
+  "name": "SensorNode-01", 
+  "speed_offset": 0.0,
+  "distance_offset": 0.0,
+  "angle_offset": 0.46,
+  "accel_offset": 0.0,
+  "accel_scale": 1.0
+}
