@@ -1,22 +1,15 @@
 #include <WiFi.h>
 #include <SPIFFS.h>
+#include <HTTPClient.h>
 #include <LiquidCrystal.h>
 
-// Include modular headers
-#include "config.h"
-#include "globals.h"
-#include "lcd_display.h"
-#include "session.h"
-#include "speed_sensor.h"
-#include "wifi_loader.h"
-#include "http_handlers.h"
-#include "accelerometer.h"
-#include "tasks.h"
-#include "startup_check.h"
-
 #if ENABLE_HTTP
-#include <WebServer.h>
+#include <HTTPServer.hpp>
+#include <HTTPSServer.hpp>
 #endif
+
+// Include the Core Library
+#include <SpeedReaderCore.h>
 
 #if ENABLE_BT
 #include <BluetoothSerial.h>
@@ -47,6 +40,8 @@ float maxSpeed_mph = 0.0f;
 float currentAngle = 0.0f;
 float maxAngle = -180.0f;
 float minAngle = 180.0f;
+float currentVibration = 0.0f;
+float maxVibration = 0.0f;
 
 // Job tracking
 char currentJob[32] = "";
@@ -57,10 +52,14 @@ float speedOffset = 0.0f;
 float distanceOffset = 0.0f;
 float angleOffset = 0.0f;
 float accelOffset = 0.0f;
+float vibrationOffset = 0.0f;
 float accelScale = 1.0f;
 float speedScale = 1.0f;
 int pulsesPerRotation = 1; // Defaulting to 1
-char adminPassword[32] = "hello"; // Default plaintext for initial setup attempt
+char apiKey[64] = "hello"; // Default API Key for initial setup attempt
+char devicePassword[32] = "admin"; // Device Password required to change API Key
+char registerUrl[128] = ""; 
+char station[32] = "DefaultStation";
 
 // Radio / server state
 #if ENABLE_BT
@@ -72,7 +71,96 @@ bool haveBT = false;
 bool serverStarted = false;
 
 #if ENABLE_HTTP
-WebServer server(80);
+HTTPServer *server = NULL;
+SSLCert *cert = NULL;
+bool useHTTPS = false;  // Default to HTTP to avoid heap issues, can be overridden by config
+
+void setupHTTPServer() {
+  Serial.println("Setting up HTTP Server (port 80)...");
+  server = new HTTPServer(80);
+  
+  if (server) {
+    registerRoutes(server);
+    server->start();
+    if (server->isRunning()) {
+        serverStarted = true;
+        Serial.println("HTTP Server Ready on port 80");
+    } else {
+        Serial.println("ERROR: HTTP Server failed to start!");
+    }
+  }
+}
+
+void setupHTTPSServer() {
+  Serial.printf("Free heap before HTTPS setup: %u bytes\n", ESP.getFreeHeap());
+  Serial.println("Setting up HTTPS Server (port 443)...");
+  
+  // Try to allocate certificate
+  cert = new SSLCert();
+  if (!cert) {
+    Serial.println("ERROR: Failed to allocate SSLCert - out of memory!");
+    return;
+  }
+  
+  bool hasCert = false;
+  if (SPIFFS.exists("/cert.der") && SPIFFS.exists("/key.der")) {
+    Serial.println("Loading cert from SPIFFS...");
+    File certFile = SPIFFS.open("/cert.der", "r");
+    File keyFile = SPIFFS.open("/key.der", "r");
+    
+    if (certFile && keyFile) {
+       uint16_t certLen = certFile.size();
+       uint16_t keyLen = keyFile.size();
+       
+       Serial.printf("Cert size: %d bytes, Key size: %d bytes\n", certLen, keyLen);
+       
+       uint8_t * cData = new uint8_t[certLen];
+       uint8_t * kData = new uint8_t[keyLen];
+       
+       if (cData && kData) {
+         certFile.read(cData, certLen);
+         keyFile.read(kData, keyLen);
+         
+         *cert = SSLCert(cData, certLen, kData, keyLen);
+         hasCert = true;
+         Serial.println("Cert loaded from SPIFFS successfully.");
+       } else {
+         Serial.println("ERROR: Failed to allocate cert buffers!");
+         if (cData) delete[] cData;
+         if (kData) delete[] kData;
+       }
+    }
+    certFile.close();
+    keyFile.close();
+  }
+  
+  if (!hasCert) {
+      Serial.println("");
+      Serial.println("====== CERTIFICATE REQUIRED ======");
+      Serial.println("No certificate found in SPIFFS!");
+      Serial.println("");
+      Serial.println("This device requires a pre-generated certificate");
+      Serial.println("due to memory constraints.");
+      Serial.println("");
+      Serial.println("Please generate using OpenSSL (see guide)");
+      Serial.println("===================================");
+      return;
+  }
+  
+  // Create HTTPS server on port 443, limiting to 1 connection to save memory
+  server = new HTTPSServer(cert, 443, 1);
+  
+  if (server) {
+    registerRoutes(server);
+    server->start();
+    if (server->isRunning()) {
+        serverStarted = true;
+        Serial.println("HTTPS Server Ready on port 443");
+    } else {
+        Serial.println("ERROR: HTTPS Server failed to start!");
+    }
+  }
+}
 #endif
 
 // Non-blocking timers
@@ -222,13 +310,33 @@ void setup() {
     delay(2000);
     
     #if ENABLE_HTTP
-    server.on("/", handleRoot);
-    server.on("/readings", handleReadings);
-    server.on("/start", handleStart);
-    server.on("/config", handleConfig);
-    server.begin();
-    serverStarted = true;
-    Serial.println("HTTP server started");
+    if (useHTTPS) {
+      setupHTTPSServer();
+    } else {
+      setupHTTPServer();
+    }
+    
+    // Register device with remote URL if configured
+    if (strlen(registerUrl) > 0) {
+      Serial.printf("Registering device: %s at station %s with %s\n", deviceName, station, registerUrl);
+      HTTPClient http;
+      http.begin(registerUrl);
+      http.addHeader("Content-Type", "application/json");
+
+      String regJson = "{";
+      regJson += "\"name\":\"" + String(deviceName) + "\",";
+      regJson += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+      regJson += "\"station\":\"" + String(station) + "\"";
+      regJson += "}";
+
+      int httpCode = http.POST(regJson);
+      if (httpCode > 0) {
+        Serial.printf("Registration successful, response: %d\n", httpCode);
+      } else {
+        Serial.printf("Registration failed, error: %s\n", http.errorToString(httpCode).c_str());
+      }
+      http.end();
+    }
     #endif
   } else {
     Serial.println("\nWiFi not available");
@@ -240,7 +348,7 @@ void setup() {
   xTaskCreatePinnedToCore(
     sensorTask,
     "SensorTask",
-    4096,
+    2048,
     NULL,
     1,
     &sensorTaskHandle,
@@ -250,7 +358,7 @@ void setup() {
   xTaskCreatePinnedToCore(
     displayTask,
     "DisplayTask",
-    4096,
+    2048,
     NULL,
     1,
     &displayTaskHandle,
@@ -271,10 +379,10 @@ void setup() {
 // ===== Main Loop =====
 void loop() {
   #if ENABLE_HTTP
-  if (serverStarted) {
-    server.handleClient();
+  if (serverStarted && server) {
+    server->loop();
   }
-  #endif
+#endif
   
   delay(10);
 }

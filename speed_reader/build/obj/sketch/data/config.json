@@ -1,11 +1,16 @@
 #line 1 "D:\\woodway\\apps\\Arduino\\Tester\\speed_reader\\data\\config.json"
 {
   "ssid": "Busse2.4",
-  "password": "woodfpefsi",
+  "wifi_password": "woodfpefsi",
   "name": "SensorNode-01", 
+  "device_password": "hello", 
+  "api_key": "5c89e0d8d142fc6c5fea945a1e",
+  "use_https": true,
   "speed_offset": 0.0,
   "distance_offset": 0.0,
   "angle_offset": 0.46,
   "accel_offset": 0.0,
-  "accel_scale": 1.0
+  "accel_scale": 1.0,
+  "register_url": "http://checklist/register_sensor", 
+  "station": "Station-01"
 }

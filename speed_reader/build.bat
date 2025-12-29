@@ -10,6 +10,9 @@ set "BOARD=esp32:esp32:esp32:PartitionScheme=huge_app"
 set "PORT="
 set "BUILD_ONLY=0"
 set "UPLOAD_ONLY=0"
+set "DATA_ONLY=0"
+set "LIBS_ONLY=0"
+set "ENABLE_BT=0"
 set "SKIP_DATA=1"
 set "CLEAN_BUILD=0"
 
@@ -23,6 +26,23 @@ if /i "%~1"=="-Port" (
     goto parse_args
 )
 if /i "%~1"=="-BuildOnly" (
+    set "BUILD_ONLY=1"
+    shift
+    goto parse_args
+)
+if /i "%~1"=="-EnableBT" (
+    set "ENABLE_BT=1"
+    shift
+    goto parse_args
+)
+if /i "%~1"=="-DataOnly" (
+    set "DATA_ONLY=1"
+    set "SKIP_DATA=0"
+    shift
+    goto parse_args
+)
+if /i "%~1"=="-LibsOnly" (
+    set "LIBS_ONLY=1"
     set "BUILD_ONLY=1"
     shift
     goto parse_args
@@ -58,6 +78,9 @@ echo.
 echo Options:
 echo   -Port COMx        Serial port (default: Auto-detect)
 echo   -BuildOnly        Compile only without uploading
+echo   -LibsOnly         Pre-compile libraries only (fastest sketch builds)
+echo   -DataOnly         Upload SPIFFS data only (skip compilation and sketch)
+echo   -EnableBT         Enable Bluetooth (Disabled by default to save RAM)
 echo   -UploadOnly       Upload only without compiling (fast)
 echo   -UploadData       Upload SPIFFS data (disabled by default)
 echo   -SkipData         Skip uploading SPIFFS data (default)
@@ -68,6 +91,8 @@ echo Examples:
 echo   build.bat
 echo   build.bat -Port COM5
 echo   build.bat -BuildOnly
+echo   build.bat -LibsOnly
+echo   build.bat -DataOnly
 echo   build.bat -UploadOnly
 exit /b 0
 
@@ -114,6 +139,9 @@ echo Sketch: %SKETCH_NAME%
 echo Board: %BOARD%
 echo Port: %PORT%
 echo Build only: %BUILD_ONLY%
+echo Libs only: %LIBS_ONLY%
+echo Data only: %DATA_ONLY%
+echo Enable BT: %ENABLE_BT%
 echo Upload only: %UPLOAD_ONLY%
 echo Skip Data: %SKIP_DATA%
 echo Clean Build: %CLEAN_BUILD%
@@ -145,17 +173,45 @@ if %UPLOAD_ONLY% equ 1 (
     goto upload_sketch
 )
 
+REM Check if data-only mode
+if %DATA_ONLY% equ 1 (
+    echo Data-only mode. Skipping compilation and sketch upload.
+    echo.
+    goto upload_data_start
+)
+
 REM Compile the sketch
 echo Compiling sketch...
+echo (Libraries in: %SKETCH_PATH%\libraries and %SKETCH_PATH%\lib)
 echo.
 if not exist "%SKETCH_PATH%\build\obj" mkdir "%SKETCH_PATH%\build\obj"
 if not exist "%SKETCH_PATH%\build\bin" mkdir "%SKETCH_PATH%\build\bin"
-call arduino-cli compile --fqbn %BOARD% --build-path "%SKETCH_PATH%\build\obj" --output-dir "%SKETCH_PATH%\build\bin" "%SKETCH_PATH%" --verbose
+
+REM Multiple --library flags ensure all local components are correctly discovered and compiled separately
+REM Using -j 0 to use all available CPU cores
+REM Enabling build properties for core caching
+call arduino-cli compile --fqbn %BOARD% ^
+    --library "%SKETCH_PATH%\libraries\SpeedReaderCore" ^
+    --library "%SKETCH_PATH%\lib\esp32_https_server" ^
+    --build-path "%SKETCH_PATH%\build\obj" ^
+    --output-dir "%SKETCH_PATH%\build\bin" ^
+    --build-property "build.cache_core=true" ^
+    --build-property "compiler.cache_core=true" ^
+    --build-property "build.extra_flags=-DENABLE_BT=%ENABLE_BT%" ^
+    -j 0 ^
+    "%SKETCH_PATH%" --verbose
 
 if errorlevel 1 (
     echo.
     echo Compilation failed!
     exit /b 1
+)
+
+if %LIBS_ONLY% equ 1 (
+    echo.
+    echo Library pre-compilation successful!
+    echo Sketch is now ready for fast builds.
+    exit /b 0
 )
 
 echo.
@@ -183,6 +239,7 @@ if errorlevel 1 (
 echo Sketch upload successful!
 echo.
 
+:upload_data_start
 REM Upload SPIFFS Data
 if %SKIP_DATA% equ 0 (
     echo Processing SPIFFS data...
