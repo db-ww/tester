@@ -3,6 +3,7 @@
 #include "SR_SpeedSensor.h"
 #include "SR_WiFiLoader.h"
 #include <WiFi.h>
+#include <SPIFFS.h>
 
 #if ENABLE_HTTP
 
@@ -286,6 +287,93 @@ void registerRoutes(HTTPServer *srv) {
   srv->registerNode(nodeStart);
   srv->registerNode(nodeReadings);
   srv->registerNode(nodeConfig);
+}
+
+void setupHTTPServer() {
+  Serial.println("Setting up HTTP Server (port 80)...");
+  server = new HTTPServer(80);
+  
+  if (server) {
+    registerRoutes(server);
+    server->start();
+    if (server->isRunning()) {
+        serverStarted = true;
+        Serial.println("HTTP Server Ready on port 80");
+    } else {
+        Serial.println("ERROR: HTTP Server failed to start!");
+    }
+  }
+}
+
+void setupHTTPSServer() {
+  Serial.printf("Free heap before HTTPS setup: %u bytes\n", ESP.getFreeHeap());
+  Serial.println("Setting up HTTPS Server (port 443)...");
+  
+  // Try to allocate certificate
+  cert = new SSLCert();
+  if (!cert) {
+    Serial.println("ERROR: Failed to allocate SSLCert - out of memory!");
+    return;
+  }
+  
+  bool hasCert = false;
+  if (SPIFFS.exists("/cert.der") && SPIFFS.exists("/key.der")) {
+    Serial.println("Loading cert from SPIFFS...");
+    File certFile = SPIFFS.open("/cert.der", "r");
+    File keyFile = SPIFFS.open("/key.der", "r");
+    
+    if (certFile && keyFile) {
+       uint16_t certLen = certFile.size();
+       uint16_t keyLen = keyFile.size();
+       
+       Serial.printf("Cert size: %d bytes, Key size: %d bytes\n", certLen, keyLen);
+       
+       uint8_t * cData = new uint8_t[certLen];
+       uint8_t * kData = new uint8_t[keyLen];
+       
+       if (cData && kData) {
+         certFile.read(cData, certLen);
+         keyFile.read(kData, keyLen);
+         
+         *cert = SSLCert(cData, certLen, kData, keyLen);
+         hasCert = true;
+         Serial.println("Cert loaded from SPIFFS successfully.");
+       } else {
+         Serial.println("ERROR: Failed to allocate cert buffers!");
+         if (cData) delete[] cData;
+         if (kData) delete[] kData;
+       }
+    }
+    certFile.close();
+    keyFile.close();
+  }
+  
+  if (!hasCert) {
+      Serial.println("");
+      Serial.println("====== CERTIFICATE REQUIRED ======");
+      Serial.println("No certificate found in SPIFFS!");
+      Serial.println("");
+      Serial.println("This device requires a pre-generated certificate");
+      Serial.println("due to memory constraints.");
+      Serial.println("");
+      Serial.println("Please generate using OpenSSL (see guide)");
+      Serial.println("===================================");
+      return;
+  }
+  
+  // Create HTTPS server on port 443, limiting to 1 connection to save memory
+  server = new HTTPSServer(cert, 443, 1);
+  
+  if (server) {
+    registerRoutes(server);
+    server->start();
+    if (server->isRunning()) {
+        serverStarted = true;
+        Serial.println("HTTPS Server Ready on port 443");
+    } else {
+        Serial.println("ERROR: HTTPS Server failed to start!");
+    }
+  }
 }
 
 #endif

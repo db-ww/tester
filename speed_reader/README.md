@@ -36,4 +36,3 @@ Detailed guides are available in the [docs](./docs) folder:
 4. **Register**: The device will automatically ping your `register_url` once connected!
 
 ---
-*Built with ❤️ for Woodway*

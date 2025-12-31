@@ -20,6 +20,8 @@ void handleReadings(HTTPRequest * req, HTTPResponse * res);
 void handleConfig(HTTPRequest * req, HTTPResponse * res);
 void middlewareAuthentication(HTTPRequest * req, HTTPResponse * res, std::function<void()> next);
 void registerRoutes(HTTPServer *srv);
+void setupHTTPServer();
+void setupHTTPSServer();
 #endif
 
 #endif // SR_HTTP_HANDLERS_H

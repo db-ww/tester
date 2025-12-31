@@ -15,6 +15,7 @@ set "LIBS_ONLY=0"
 set "ENABLE_BT=0"
 set "SKIP_DATA=1"
 set "CLEAN_BUILD=0"
+set "MONITOR_ONLY=0"
 
 REM Parse command line arguments
 :parse_args
@@ -67,6 +68,11 @@ if /i "%~1"=="-Clean" (
     shift
     goto parse_args
 )
+if /i "%~1"=="-MonitorOnly" (
+    set "MONITOR_ONLY=1"
+    shift
+    goto parse_args
+)
 if /i "%~1"=="-h" goto show_help
 if /i "%~1"=="--help" goto show_help
 shift
@@ -85,6 +91,7 @@ echo   -UploadOnly       Upload only without compiling (fast)
 echo   -UploadData       Upload SPIFFS data (disabled by default)
 echo   -SkipData         Skip uploading SPIFFS data (default)
 echo   -Clean            Clean build directory before compiling
+echo   -MonitorOnly      Open Serial Monitor only
 echo   -h, --help        Show this help message
 echo.
 echo Examples:
@@ -94,12 +101,16 @@ echo   build.bat -BuildOnly
 echo   build.bat -LibsOnly
 echo   build.bat -DataOnly
 echo   build.bat -UploadOnly
+echo   build.bat -MonitorOnly
 exit /b 0
 
 :args_done
 REM Auto-detect port if not specified and we need to upload
 if "%PORT%"=="" (
-    if %BUILD_ONLY% equ 0 (
+    set "DO_AUTO_PORT=0"
+    if %BUILD_ONLY% equ 0 set "DO_AUTO_PORT=1"
+    if %MONITOR_ONLY% equ 1 set "DO_AUTO_PORT=1"
+    if "!DO_AUTO_PORT!"=="1" (
         echo Auto-detecting COM port...
         for /f "tokens=1" %%a in ('arduino-cli board list ^| findstr "COM"') do (
             set "PORT=%%a"
@@ -145,6 +156,7 @@ echo Enable BT: %ENABLE_BT%
 echo Upload only: %UPLOAD_ONLY%
 echo Skip Data: %SKIP_DATA%
 echo Clean Build: %CLEAN_BUILD%
+echo Monitor only: %MONITOR_ONLY%
 echo.
 
 if %CLEAN_BUILD% equ 1 (
@@ -165,6 +177,13 @@ if errorlevel 1 (
 
 echo Found arduino-cli
 echo.
+
+REM Check if monitor-only mode
+if %MONITOR_ONLY% equ 1 (
+    echo Monitor-only mode. Skipping compilation and upload.
+    echo.
+    goto skip_data_upload
+)
 
 REM Check if upload-only mode
 if %UPLOAD_ONLY% equ 1 (
@@ -289,6 +308,7 @@ echo Press Ctrl+C to exit Serial Monitor
 echo.
 
 REM Open serial monitor at 115200 baud (ESP32 standard)
+echo arduino-cli monitor -c baudrate=115200 -p %PORT%
 call arduino-cli monitor -p %PORT% -c baudrate=115200
 
 exit /b 0

@@ -1,6 +1,7 @@
 #include "SR_WiFiLoader.h"
 #include <SPIFFS.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include "globals.h"
 
 // ===== Helper Functions =====
@@ -205,4 +206,29 @@ void saveConfig() {
   file.print(json);
   file.close();
   Serial.println("Config saved.");
+}
+
+void registerDevice() {
+  if (strlen(registerUrl) > 0 && WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0,0,0,0)) {
+    Serial.printf("Registering device: %s at station %s with %s\n", deviceName, station, registerUrl);
+    HTTPClient http;
+    http.begin(registerUrl);
+    http.addHeader("Content-Type", "application/json");
+
+    String regJson = "{";
+    regJson += "\"name\":\"" + String(deviceName) + "\",";
+    regJson += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
+    regJson += "\"station\":\"" + String(station) + "\"";
+    regJson += "}";
+
+    int httpCode = http.POST(regJson);
+    if (httpCode > 0) {
+      Serial.printf("Registration successful, response: %d\n", httpCode);
+    } else {
+      Serial.printf("Registration failed, error: %s\n", http.errorToString(httpCode).c_str());
+    }
+    http.end();
+  } else if (strlen(registerUrl) > 0) {
+    Serial.println("Skipping registration - WiFi not fully ready");
+  }
 }

@@ -11,5 +11,6 @@ String getJsonValue(String json, String key);
 // WiFi/System Configuration Loader
 bool loadWiFiConfig();
 void saveConfig();
+void registerDevice();
 
 #endif // SR_WIFI_LOADER_H

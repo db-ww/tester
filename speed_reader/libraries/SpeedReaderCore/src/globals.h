@@ -4,6 +4,11 @@
 #include <Arduino.h>
 #include "config.h"
 
+// FreeRTOS includes for ESP32
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
+
 // Forward declarations to avoid heavy includes here
 class LiquidCrystal;
 #if ENABLE_HTTP
